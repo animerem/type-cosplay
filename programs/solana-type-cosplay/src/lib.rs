@@ -8,14 +8,19 @@ pub mod type_cosplay {
     use super::*;
 
     pub fn initialize_admin(ctx: Context<Initialize>) -> Result<()> {
-        let space = 32;
-        let lamports = Rent::get()?.minimum_balance(space as usize);
+        let admin_config = AdminConfig {
+            admin: ctx.accounts.payer.key(),
+        };
+
+        let serialized_data = admin_config.try_to_vec()?;
+        let space = serialized_data.len();
+        let lamports = Rent::get()?.minimum_balance(space);
 
         let ix = anchor_lang::solana_program::system_instruction::create_account(
             &ctx.accounts.payer.key(),
             &ctx.accounts.new_account.key(),
             lamports,
-            space,
+            space as u64,
             &ctx.program_id,
         );
 
@@ -28,28 +33,30 @@ pub mod type_cosplay {
             ],
         )?;
 
-        let mut account =
-            AdminConfig::try_from_slice(&ctx.accounts.new_account.data.borrow()).unwrap();
+        // Запись сериализованных данных в аккаунт
+        let mut data = ctx.accounts.new_account.data.borrow_mut();
+        data[..space].copy_from_slice(&serialized_data);
 
-        account.admin = ctx.accounts.payer.key();
-        account.serialize(&mut *ctx.accounts.new_account.data.borrow_mut())?;
-
-        msg!("Admin: {}", account.admin.to_string());
         Ok(())
     }
 
     pub fn initialize_user(ctx: Context<Initialize>) -> Result<()> {
-        let space = 32;
-        let lamports = Rent::get()?.minimum_balance(space as usize);
-
+        let user_data = User {
+            user: ctx.accounts.payer.key(),
+        };
+    
+        let serialized_data = user_data.try_to_vec()?;
+        let space = serialized_data.len();
+        let lamports = Rent::get()?.minimum_balance(space);
+    
         let ix = anchor_lang::solana_program::system_instruction::create_account(
             &ctx.accounts.payer.key(),
             &ctx.accounts.new_account.key(),
             lamports,
-            space,
+            space as u64,
             &ctx.program_id,
         );
-
+    
         anchor_lang::solana_program::program::invoke(
             &ix,
             &[
@@ -58,56 +65,60 @@ pub mod type_cosplay {
                 ctx.accounts.system_program.to_account_info(),
             ],
         )?;
-
-        let mut account = User::try_from_slice(&ctx.accounts.new_account.data.borrow()).unwrap();
-
-        account.user = ctx.accounts.payer.key();
-        account.serialize(&mut *ctx.accounts.new_account.data.borrow_mut())?;
-
-        msg!("User: {}", account.user.to_string());
+    
+        ctx.accounts
+            .new_account
+            .data
+            .borrow_mut()[..space]
+            .copy_from_slice(&serialized_data);
+    
+        msg!("User: {}", ctx.accounts.payer.key());
+    
         Ok(())
     }
+    
 
     pub fn update_admin(ctx: Context<UpdateAdmin>) -> Result<()> {
-        let mut account =
-            AdminConfig::try_from_slice(&ctx.accounts.admin_config.data.borrow()).unwrap();
-
+        let mut account = AdminConfig::try_from_slice(&ctx.accounts.admin_config.data.borrow())
+            .map_err(|_| ProgramError::InvalidAccountData)?;
+    
         if ctx.accounts.admin.key() != account.admin {
-            return Err(ProgramError::InvalidAccountData.into());
+            return Err(ProgramError::IllegalOwner.into());
         }
-
-        account.admin = ctx.accounts.new_admin.key();
+    
+        account.admin = ctx.accounts.admin.key();
         account.serialize(&mut *ctx.accounts.admin_config.data.borrow_mut())?;
-
-        msg!("New Admin: {}", account.admin.to_string());
+    
+        msg!("Admin updated to {}", account.admin);
+    
         Ok(())
     }
+    
 }
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
-    pub new_account: Signer<'info>,
-    #[account(mut)]
     pub payer: Signer<'info>,
+    #[account(mut)]
+    pub new_account: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct UpdateAdmin<'info> {
     #[account(mut)]
-    /// CHECK:
-    admin_config: AccountInfo<'info>,
-    new_admin: SystemAccount<'info>,
-    admin: Signer<'info>,
+    pub admin: Signer<'info>,
+    #[account(mut)]
+    pub admin_config: UncheckedAccount<'info>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct AdminConfig {
-    admin: Pubkey,
+    pub admin: Pubkey,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct User {
-    user: Pubkey,
+    pub user: Pubkey,
 }
